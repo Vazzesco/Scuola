@@ -96,10 +96,35 @@ function block(pts,mat){
  const m=new THREE.Mesh(new THREE.ExtrudeGeometry(sh,{depth:D,bevelEnabled:false}),mat);m.receiveShadow=true;S.add(m);return m;}
 const xs=(a,b)=>{const o=[];for(let x=a;x<=b+1e-6;x+=.25)o.push([x,T(x)]);return o;};
 const ocP=xs(-10,-1.25).concat([[-1,0],[7,-5.5],[6.43,-6.32],[-1.82,-1],[-10,-1]]);
+// Magma fluido: texture di lava trasportata da un campo di velocità (due celle convettive + trascinamento della placca)
+const lv=TL.load(IMG.lava);lv.wrapS=lv.wrapT=THREE.RepeatWrapping;
+const LAVA=new THREE.ShaderMaterial({uniforms:{tex:{value:lv},time:{value:0}},
+vertexShader:'varying vec3 vP;varying vec3 vN;void main(){vP=position;vN=normal;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+fragmentShader:`uniform sampler2D tex;uniform float time;varying vec3 vP;varying vec3 vN;
+vec2 vort(vec2 p,vec2 c,float R,float s){vec2 r=p-c;return s*vec2(-r.y,r.x)*exp(-dot(r,r)/(R*R));}
+vec2 vel(vec2 p){
+ vec2 v=vort(p,vec2(-7.9,-5.3),3.4,.35)+vort(p,vec2(-.2,-5.8),5.5,-.28);
+ vec2 sd=vec2(.824,-.566),n=vec2(-.566,-.824);float s=dot(p-vec2(-1.566,-.824),n);
+ v+=sd*1.1*smoothstep(-.3,.4,s)*exp(-s*s/1.6)*smoothstep(-1.,-3.,-p.y*.0-p.y*.3-.0);
+ return v;}
+vec3 lava(vec2 p,vec2 v,float sc,float off){
+ float t=time/3.+off;float a=fract(t),b=fract(t+.5),w=abs(2.*a-1.);
+ vec2 uv=p*sc;
+ return mix(texture2D(tex,uv-v*sc*a*3.).rgb,texture2D(tex,uv-v*sc*b*3.+.37).rgb,w);}
+void main(){
+ bool cap=abs(vN.z)>.5;
+ vec2 p=cap?vP.xy:vec2(vP.z+(vP.x>0.?5.:0.),vP.y);
+ vec2 v=cap?vel(p):vec2(0.);
+ float sp=length(v);
+ vec3 c=lava(p,v,.14,0.)*.75+lava(p+3.1,v*1.4,.31,.3)*.45;
+ vec3 tint=mix(vec3(1.,.92,.75),vec3(.8,.28,.2),smoothstep(-5.,-11.,p.y));
+ float up=exp(-pow(p.x+6.,2.)/1.4)*smoothstep(-9.,-2.,p.y);
+ c=c*tint*(.85+.9*sp)+vec3(1.,.55,.1)*up*.35;
+ gl_FragColor=vec4(c,1.);}`});
 block(ocP,new THREE.MeshStandardMaterial({map:tex('#6c7864','#3d4638','#97a58a',70,.25,'rock'),roughness:.9}));
 block([[-1,0]].concat(xs(-.75,10),[[10,-5.5],[7,-5.5]]),new THREE.MeshStandardMaterial({map:tex('#a39870','#6c5e3f','#cdbf94',90,.25,'rock'),roughness:.95}));
-block([[-10,-9],[10,-9],[10,-5.5],[7,-5.5],[6.43,-6.32],[-1.82,-1],[-10,-1]],new THREE.MeshStandardMaterial({map:tex('#ee8f3c','#c75a1b','#ffc06a',50,.2,'lava'),emissive:0x3a1400,roughness:.8}));
-block([[-10,-12],[10,-12],[10,-9],[-10,-9]],new THREE.MeshStandardMaterial({map:tex('#a63c22','#5a1408','#d4663c',50,.2,'lava'),emissive:0x4a0f04,roughness:.8}));
+block([[-10,-9],[10,-9],[10,-5.5],[7,-5.5],[6.43,-6.32],[-1.82,-1],[-10,-1]],LAVA);
+block([[-10,-12],[10,-12],[10,-9],[-10,-9]],LAVA);
 // Oceano
 const wp=[[-10,.85],[.8,.85]];for(let x=.75;x>=-10;x-=.25)wp.push([x,T(x)]);
 const wb=block(wp,new THREE.MeshStandardMaterial({color:0x1f78c8,transparent:true,opacity:.42,depthWrite:false,roughness:.2}));wb.receiveShadow=false;
@@ -167,7 +192,7 @@ function lane(pts,k,r,sp){
  const cn=document.createElement('canvas');cn.width=128;cn.height=8;const g=cn.getContext('2d'),gr=g.createLinearGradient(0,0,128,0);
  gr.addColorStop(0,'rgba(255,110,30,0)');gr.addColorStop(.7,'rgba(255,180,80,.85)');gr.addColorStop(1,'rgba(255,255,220,1)');g.fillStyle=gr;g.fillRect(0,0,128,8);
  const t=new THREE.CanvasTexture(cn);t.wrapS=THREE.RepeatWrapping;t.repeat.set(Math.max(2,Math.round(c.getLength()/2.2)),1);
- const m=new THREE.Mesh(new THREE.TubeGeometry(c,160,r,8,true),new THREE.MeshBasicMaterial({map:t,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));
+ const m=new THREE.Mesh(new THREE.TubeGeometry(c,160,r,8,true),new THREE.MeshBasicMaterial({map:t,transparent:true,opacity:.5,blending:THREE.AdditiveBlending,depthWrite:false}));
  m.renderOrder=3;S.add(m);lanes.push({c,t,sp});}
 [[1,.1,.45],[.72,.08,.7],[.45,.06,1]].forEach(([k,r,sp])=>{lane(RP,k,r,sp);lane(LP,k,r,sp);});
 const NF=450,fl=pts(NF,0xffc46a,.26,true,.9),fpp=[];
@@ -217,7 +242,7 @@ addEventListener('resize',rs);rs();
 
 let last=performance.now(),tm=0;
 function frame0(now){
- const dt=Math.min(.05,(now-last)/1000);last=now;
+ const dt=Math.max(0,Math.min(.05,(now-last)/1000));last=now;
  if(!paused){
   tm+=dt;
   arrows.forEach(a=>{a.t=(a.t+a.s*dt)%1;a.m.position.copy(a.c.getPointAt(a.t));a.m.quaternion.setFromUnitVectors(up,a.c.getTangentAt(a.t));});
@@ -234,7 +259,7 @@ function frame0(now){
   for(let i=0;i<30;i++){ma[i]=(ma[i]+dt*.12)%1;const p=mp.getPointAt(ma[i]);a.setXYZ(i,p.x+Math.sin(i*3+tm*2)*.1,p.y,p.z+.05);}
   a.needsUpdate=true;
   quakes.forEach(q=>{const k=Math.max(0,Math.sin(tm*1.5+q.p*3));q.m.material.opacity=k*k;q.m.scale.setScalar(.6+k*1.6);});
-  stL.offset.x+=dt*.1;stR.offset.x-=dt*.1;TX[1].t.offset.x-=dt*.004;TX[2].t.offset.x+=dt*.015;TX[3].t.offset.x-=dt*.008;fis.scale.y=1+.4*Math.sin(tm*5);
+  stL.offset.x+=dt*.1;stR.offset.x-=dt*.1;TX[1].t.offset.x-=dt*.004;LAVA.uniforms.time.value=tm;fis.scale.y=1+.4*Math.sin(tm*5);
   a=rfx.geometry.attributes.position;
   for(let i=0;i<NR;i++){ra[i]=(ra[i]+dt*.6)%1;const t=ra[i],u=2*t-1,sp=(i%2?1:-1)*t*.8;a.setXYZ(i,-6+sp+Math.sin(i)*.1,.48+.27*(1-u*u),rz[i]);}
   a.needsUpdate=true;
